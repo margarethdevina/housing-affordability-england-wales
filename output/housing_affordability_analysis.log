@@ -1,0 +1,2953 @@
+-----------------------------------------------------------------------
+      name:  <unnamed>
+       log:  C:\Users\ASUS Expertbook\OneDrive\Documents\Job Applicatio
+> n\Portfolio\Housing\github\housing-affordability-england-wales\output
+> /housing_affordability_analysis.log
+  log type:  text
+ opened on:   6 Oct 2026, 21:00:58
+
+. 
+. 
+. 
+. * ============================================================
+. * STEP 1: PREPARE ANNUAL EARNINGS DATA
+. * ============================================================
+. 
+. 
+. * ============================================================
+. * 2. FIND ALL 2015-2025 EARNINGS FILES
+. * ============================================================
+. 
+. * Find every .xls or .xlsx file containing
+. * "Annual pay - Gross" in the filename.
+. *
+. * This allows the annual files to be processed automatically
+. * instead of importing each year manually.
+. local files : dir "$earnings" files "*Annual pay - Gross*.xls*"
+
+. 
+. * Show which files Stata found.
+. display `"`files'"'
+"home geography table 8.7a   annual pay - gross 2015.xls" "home geograp
+> hy table 8.7a   annual pay - gross 2016.xls" "home geography table 8.
+> 7a   annual pay - gross 2017.xls" "home geography table 8.7a   annual
+>  pay - gross 2018.xls" "home geography table 8.7a   annual pay - gros
+> s 2019.xls" "home geography table 8.7a   annual pay - gross 2020.xls"
+>  "home geography table 8.7a   annual pay - gross 2021.xls" "home geog
+> raphy table 8.7a   annual pay - gross 2022.xls" "home geography table
+>  8.7a   annual pay - gross 2023.xlsx" "home geography table 8.7a   an
+> nual pay - gross 2024.xlsx" "prov - home geography table 8.7a   annua
+> l pay - gross 2025.xlsx"
+
+. 
+. 
+. 
+. * ============================================================
+. * 3. COMBINE THE ANNUAL EARNINGS FILES
+. * ============================================================
+. 
+. * Temporary dataset used while annual files are combined.
+. tempfile earnings_master
+
+. 
+. * first = 1 means no annual file has yet been saved.
+. local first = 1
+
+. 
+. 
+. foreach file of local files {
+  2. 
+.     display "================================================"
+  3.     display "Importing earnings file: `file'"
+  4.     display "================================================"
+  5. 
+. 
+.     * --------------------------------------------------------
+.     * 3A. IDENTIFY THE YEAR FROM THE FILENAME
+.     * --------------------------------------------------------
+. 
+.     * regexm() checks whether the filename contains a
+.     * four-digit year beginning with 20.
+.     *
+.     * Example:
+.     * "... Gross 2019.xls" -> match found.
+.     if regexm("`file'", "(20[0-9][0-9])") {
+  6. 
+.         * regexs(1) returns the year that regexm() found.
+.         local year = regexs(1)
+  7.     }
+  8. 
+.     else {
+  9. 
+.         * Stop rather than silently assigning the wrong year.
+.         display as error ///
+>         "Could not identify the year in file: `file'"
+ 10. 
+.         exit 198
+ 11.     }
+ 12. 
+. 
+.     * --------------------------------------------------------
+.     * 3B. IMPORT THE FULL-TIME WORKSHEET
+.     * --------------------------------------------------------
+. 
+.     * The useful table begins at cell A5.
+.     *
+.     * allstring imports all fields as text first.
+.     * This preserves ONS values such as "x", which are used
+.     * when an estimate has been suppressed.
+.     import excel using "$earnings/`file'", ///
+>         sheet("Full-Time") ///
+>         cellrange(A5) ///
+>         firstrow ///
+>         allstring ///
+>         clear
+ 13. 
+. 
+.     * --------------------------------------------------------
+.     * 3C. CHECK THAT REQUIRED VARIABLES EXIST
+.     * --------------------------------------------------------
+. 
+.     * confirm variable checks that the expected column exists.
+.     *
+.     * capture prevents Stata stopping immediately if it does not.
+.     * _rc then records whether the check produced an error.
+. 
+.     capture confirm variable Description
+ 14. 
+.     if _rc {
+ 15.         display as error ///
+>         "Description variable not found in `file'"
+ 16. 
+.         exit 111
+ 17.     }
+ 18. 
+. 
+.     capture confirm variable Code
+ 19. 
+.     if _rc {
+ 20.         display as error ///
+>         "Code variable not found in `file'"
+ 21. 
+.         exit 111
+ 22.     }
+ 23. 
+. 
+.     capture confirm variable Median
+ 24. 
+.     if _rc {
+ 25.         display as error ///
+>         "Median variable not found in `file'"
+ 26. 
+.         exit 111
+ 27.     }
+ 28. 
+. 
+.     * --------------------------------------------------------
+.     * 3D. KEEP AND RENAME THE VARIABLES NEEDED
+.     * --------------------------------------------------------
+. 
+.     keep Description Code Median
+ 29. 
+.     rename Description geography_name
+ 30.     rename Code        geography_code
+ 31. 
+.     * Preserve the original ONS earnings value.
+.     *
+.     * Example:
+.     * "35446" remains "35446"
+.     * "x" remains "x"
+.     rename Median median_annual_pay_raw
+ 32. 
+. 
+.     * Remove unnecessary leading/trailing spaces.
+.     replace geography_name = strtrim(geography_name)
+ 33.     replace geography_code = strtrim(geography_code)
+ 34. 
+. 
+.     * --------------------------------------------------------
+.     * 3E. CREATE YEAR AND PROVISIONAL STATUS
+.     * --------------------------------------------------------
+. 
+.     * local year is currently text such as "2019".
+.     * real() converts it into numeric 2019.
+.     gen year = real("`year'")
+ 35. 
+.     * The 2025 earnings file is provisional.
+.     gen provisional = (year == 2025)
+ 36. 
+. 
+.     * --------------------------------------------------------
+.     * 3F. CREATE NUMERIC EARNINGS
+.     * --------------------------------------------------------
+. 
+.     * Convert valid text numbers into numeric values.
+.     *
+.     * Non-numeric values such as "x" become numeric missing (.).
+.     * The original value is retained in median_annual_pay_raw.
+.     destring median_annual_pay_raw, ///
+>         generate(median_annual_pay) ///
+>         force
+ 37. 
+. 
+.     * --------------------------------------------------------
+.     * 3G. REMOVE ROWS WITHOUT A USABLE GEOGRAPHY CODE
+.     * --------------------------------------------------------
+. 
+.     * These rows cannot later be matched reliably with
+.     * house-price data.
+.     drop if missing(geography_code)
+ 38. 
+. 
+.     * --------------------------------------------------------
+.     * 3H. ADD THIS YEAR TO THE COMBINED DATASET
+.     * --------------------------------------------------------
+. 
+.     if `first' == 1 {
+ 39. 
+.         * First annual file creates the temporary master.
+.         save `earnings_master', replace
+ 40. 
+.         local first = 0
+ 41.     }
+ 42. 
+.     else {
+ 43. 
+.         * Later years are added underneath the current data.
+.         append using `earnings_master'
+ 44. 
+.         save `earnings_master', replace
+ 45.     }
+ 46. }
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2015.xls
+================================================
+(25 vars, 437 obs)
+(271 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(28 missing values generated)
+(22 observations deleted)
+(file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp not
+    found)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2016.xls
+================================================
+(25 vars, 437 obs)
+(340 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(18 missing values generated)
+(6 observations deleted)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2017.xls
+================================================
+(25 vars, 437 obs)
+(340 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(22 missing values generated)
+(6 observations deleted)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2018.xls
+================================================
+(25 vars, 427 obs)
+(329 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(17 missing values generated)
+(6 observations deleted)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2019.xls
+================================================
+(25 vars, 423 obs)
+(325 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(21 missing values generated)
+(6 observations deleted)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2020.xls
+================================================
+(25 vars, 417 obs)
+(267 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(15 missing values generated)
+(6 observations deleted)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2021.xls
+================================================
+(25 vars, 417 obs)
+(267 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(12 missing values generated)
+(6 observations deleted)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2022.xls
+================================================
+(25 vars, 407 obs)
+(250 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(37 missing values generated)
+(12 observations deleted)
+(variable geography_name was str149, now str201 to accommodate using
+       data's values)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2023.xlsx
+================================================
+(25 vars, 401 obs)
+(248 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(31 missing values generated)
+(6 observations deleted)
+(variable geography_name was str149, now str201 to accommodate using
+       data's values)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: home geography table 8.7a   annual pay - gross
+>  2024.xlsx
+================================================
+(25 vars, 401 obs)
+(248 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(7 missing values generated)
+(6 observations deleted)
+(variable geography_name was str149, now str201 to accommodate using
+       data's values)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+================================================
+Importing earnings file: prov - home geography table 8.7a   annual pay 
+> - gross 2025.xlsx
+================================================
+(25 vars, 401 obs)
+(248 real changes made)
+(0 real changes made)
+median_annual_pay_raw: contains nonnumeric characters; median_annual_pa
+> y generated as long
+(7 missing values generated)
+(6 observations deleted)
+(variable geography_name was str149, now str201 to accommodate using
+       data's values)
+file C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.tmp saved as
+    .dta format
+
+. 
+. 
+. 
+. * ============================================================
+. * 4. LOAD THE COMPLETE EARNINGS DATASET
+. * ============================================================
+. 
+. use `earnings_master', clear
+
+. 
+. sort geography_code year
+
+. 
+. 
+. 
+. * ============================================================
+. * 5. BASIC EARNINGS CHECKS
+. * ============================================================
+. 
+. describe
+
+Contains data from C:\Users\ASUSEX~1\AppData\Local\Temp\ST_bd48_000001.
+> tmp
+ Observations:         4,517                  
+    Variables:             6                  6 Oct 2026 21:01
+-----------------------------------------------------------------------
+Variable      Storage   Display    Value
+    name         type    format    label      Variable label
+-----------------------------------------------------------------------
+geography_name  str201  %201s                 Description
+geography_code  str9    %9s                   Code
+median_annual~w str5    %9s                   Median
+median_annual~y long    %10.0g                Median
+year            float   %9.0g                 
+provisional     float   %9.0g                 
+-----------------------------------------------------------------------
+Sorted by: geography_code  year
+
+. 
+. * Confirm all years are present.
+. tab year
+
+       year |      Freq.     Percent        Cum.
+------------+-----------------------------------
+       2015 |        415        9.19        9.19
+       2016 |        431        9.54       18.73
+       2017 |        431        9.54       28.27
+       2018 |        421        9.32       37.59
+       2019 |        417        9.23       46.82
+       2020 |        411        9.10       55.92
+       2021 |        411        9.10       65.02
+       2022 |        395        8.74       73.77
+       2023 |        395        8.74       82.51
+       2024 |        395        8.74       91.26
+       2025 |        395        8.74      100.00
+------------+-----------------------------------
+      Total |      4,517      100.00
+
+. 
+. * Confirm only 2025 is marked provisional.
+. tab year provisional
+
+           |      provisional
+      year |         0          1 |     Total
+-----------+----------------------+----------
+      2015 |       415          0 |       415 
+      2016 |       431          0 |       431 
+      2017 |       431          0 |       431 
+      2018 |       421          0 |       421 
+      2019 |       417          0 |       417 
+      2020 |       411          0 |       411 
+      2021 |       411          0 |       411 
+      2022 |       395          0 |       395 
+      2023 |       395          0 |       395 
+      2024 |       395          0 |       395 
+      2025 |         0        395 |       395 
+-----------+----------------------+----------
+     Total |     4,122        395 |     4,517 
+
+. 
+. 
+. 
+. * ============================================================
+. * 6. CHECK MISSING AND SUPPRESSED EARNINGS
+. * ============================================================
+. 
+. * 0 = usable numeric earnings
+. * 1 = no usable numeric earnings
+. gen missing_pay = missing(median_annual_pay)
+
+. 
+. 
+. * Compare missingness across years.
+. tab year missing_pay, row
+
++----------------+
+| Key            |
+|----------------|
+|   frequency    |
+| row percentage |
++----------------+
+
+           |      missing_pay
+      year |         0          1 |     Total
+-----------+----------------------+----------
+      2015 |       392         23 |       415 
+           |     94.46       5.54 |    100.00 
+-----------+----------------------+----------
+      2016 |       418         13 |       431 
+           |     96.98       3.02 |    100.00 
+-----------+----------------------+----------
+      2017 |       414         17 |       431 
+           |     96.06       3.94 |    100.00 
+-----------+----------------------+----------
+      2018 |       409         12 |       421 
+           |     97.15       2.85 |    100.00 
+-----------+----------------------+----------
+      2019 |       401         16 |       417 
+           |     96.16       3.84 |    100.00 
+-----------+----------------------+----------
+      2020 |       401         10 |       411 
+           |     97.57       2.43 |    100.00 
+-----------+----------------------+----------
+      2021 |       404          7 |       411 
+           |     98.30       1.70 |    100.00 
+-----------+----------------------+----------
+      2022 |       369         26 |       395 
+           |     93.42       6.58 |    100.00 
+-----------+----------------------+----------
+      2023 |       369         26 |       395 
+           |     93.42       6.58 |    100.00 
+-----------+----------------------+----------
+      2024 |       393          2 |       395 
+           |     99.49       0.51 |    100.00 
+-----------+----------------------+----------
+      2025 |       393          2 |       395 
+           |     99.49       0.51 |    100.00 
+-----------+----------------------+----------
+     Total |     4,363        154 |     4,517 
+           |     96.59       3.41 |    100.00 
+
+. 
+. 
+. * Inspect the original ONS values that became numeric missing.
+. tab median_annual_pay_raw ///
+>     if missing_pay == 1, ///
+>     missing
+
+     Median |      Freq.     Percent        Cum.
+------------+-----------------------------------
+            |          1        0.65        0.65
+          x |        153       99.35      100.00
+------------+-----------------------------------
+      Total |        154      100.00
+
+. 
+. 
+. * Confirm geography + year uniquely identify observations.
+. isid geography_code year
+
+. 
+. 
+. 
+. * ============================================================
+. * 7. IDENTIFY WHY EARNINGS ARE MISSING
+. * ============================================================
+. 
+. * ONS "x" values are recorded separately as suppressed.
+. gen pay_suppressed = ///
+>     lower(strtrim(median_annual_pay_raw)) == "x"
+
+. 
+. 
+. * Blank source cells are identified separately.
+. gen pay_blank = ///
+>     strtrim(median_annual_pay_raw) == ""
+
+. 
+. 
+. * Check that missing numeric observations are explained.
+. tab missing_pay pay_suppressed, missing
+
+missing_pa |    pay_suppressed
+         y |         0          1 |     Total
+-----------+----------------------+----------
+         0 |     4,363          0 |     4,363 
+         1 |         1        153 |       154 
+-----------+----------------------+----------
+     Total |     4,364        153 |     4,517 
+
+. tab missing_pay pay_blank, missing
+
+missing_pa |       pay_blank
+         y |         0          1 |     Total
+-----------+----------------------+----------
+         0 |     4,363          0 |     4,363 
+         1 |       153          1 |       154 
+-----------+----------------------+----------
+     Total |     4,516          1 |     4,517 
+
+. 
+. 
+. * Inspect blank observations.
+. list geography_name ///
+>      geography_code ///
+>      year ///
+>      median_annual_pay_raw ///
+>      if pay_blank == 1, ///
+>      noobs clean
+
+     geography_name   geogra~de   year   median~w  
+    Isles of Scilly   E06000053   2019             
+
+. 
+. 
+. 
+. * ============================================================
+. * 8. OPTIONAL DIAGNOSTIC: SAMPLE OF MISSING EARNINGS
+. * ============================================================
+. 
+. * Temporarily keep only missing earnings so that "in 1/30"
+. * really means the first 30 missing observations.
+. 
+. preserve
+
+. 
+. keep if missing_pay == 1
+(4,363 observations deleted)
+
+. 
+. list geography_name ///
+>      geography_code ///
+>      year ///
+>      median_annual_pay_raw ///
+>      median_annual_pay ///
+>      in 1/30, ///
+>      noobs clean
+
+               geography_name   geogra~de   year   median~w   median~y 
+>  
+             Middlesbrough UA   E06000002   2022          x          . 
+>  
+                Darlington UA   E06000005   2021          x          . 
+>  
+                Darlington UA   E06000005   2022          x          . 
+>  
+              Peterborough UA   E06000031   2015          x          . 
+>  
+                   Reading UA   E06000038   2022          x          . 
+>  
+       Windsor and Maidenhead   E06000040   2019          x          . 
+>  
+    Windsor and Maidenhead UA   E06000040   2022          x          . 
+>  
+                    Wokingham   E06000041   2016          x          . 
+>  
+                 Wokingham UA   E06000041   2023          x          . 
+>  
+             Milton Keynes UA   E06000042   2022          x          . 
+>  
+           Isles of Scilly UA   E06000053   2015          x          . 
+>  
+              Isles of Scilly   E06000053   2016          x          . 
+>  
+              Isles of Scilly   E06000053   2017          x          . 
+>  
+              Isles of Scilly   E06000053   2018          x          . 
+>  
+              Isles of Scilly   E06000053   2019                     . 
+>  
+              Isles of Scilly   E06000053   2020          x          . 
+>  
+              Isles of Scilly   E06000053   2021          x          . 
+>  
+              Isles of Scilly   E06000053   2022          x          . 
+>  
+              Isles of Scilly   E06000053   2023          x          . 
+>  
+              Isles of Scilly   E06000053   2024          x          . 
+>  
+              Isles of Scilly   E06000053   2025          x          . 
+>  
+                  South Bucks   E07000006   2017          x          . 
+>  
+          East Cambridgeshire   E07000009   2022          x          . 
+>  
+          East Cambridgeshire   E07000009   2023          x          . 
+>  
+               South Lakeland   E07000031   2017          x          . 
+>  
+        North East Derbyshire   E07000038   2020          x          . 
+>  
+                   East Devon   E07000040   2022          x          . 
+>  
+                    Mid Devon   E07000042   2023          x          . 
+>  
+                  North Devon   E07000043   2017          x          . 
+>  
+                  North Devon   E07000043   2023          x          . 
+>  
+
+. 
+. restore
+
+. 
+. 
+. 
+. * ============================================================
+. * 9. SAVE THE GENERATED CLEANED EARNINGS DATASET
+. * ============================================================
+. 
+. * This retains all geographic levels before the analysis
+. * is restricted to local authorities.
+. save ///
+> "$derived/earnings_2015_2025.dta", ///
+> replace
+(file ./output/derived_data/earnings_2015_2025.dta not found)
+file ./output/derived_data/earnings_2015_2025.dta saved
+
+. 
+. 
+. 
+. * ============================================================
+. * 10. IDENTIFY LOCAL AUTHORITIES
+. * ============================================================
+. 
+. * Geography codes contain information about geography type.
+. * The first three characters identify the broad code family.
+. gen geography_prefix = ///
+>     substr(geography_code, 1, 3)
+
+. 
+. 
+. * Inspect the geography types in the source.
+. tab geography_prefix
+
+geography_p |
+      refix |      Freq.     Percent        Cum.
+------------+-----------------------------------
+        E06 |        651       14.41       14.41
+        E07 |      2,001       44.30       58.71
+        E08 |        396        8.77       67.48
+        E09 |        363        8.04       75.51
+        E10 |        264        5.84       81.36
+        E11 |         66        1.46       82.82
+        E12 |         90        1.99       84.81
+        E13 |         22        0.49       85.30
+        E92 |         10        0.22       85.52
+        K02 |         10        0.22       85.74
+        K03 |         10        0.22       85.96
+        K04 |         10        0.22       86.19
+        N92 |         10        0.22       86.41
+        S12 |        352        7.79       94.20
+        S92 |         10        0.22       94.42
+        W06 |        242        5.36       99.78
+        W92 |         10        0.22      100.00
+------------+-----------------------------------
+      Total |      4,517      100.00
+
+. 
+. 
+. 
+. * ============================================================
+. * 11. FLAG LOCAL AUTHORITIES
+. * ============================================================
+. 
+. * Local-authority code families used in this project:
+. *
+. * E06 = English unitary authorities
+. * E07 = English non-metropolitan districts
+. * E08 = English metropolitan districts
+. * E09 = London boroughs
+. * W06 = Welsh unitary authorities
+. 
+. gen is_local_authority = ///
+>     inlist(geography_prefix, ///
+>            "E06", "E07", "E08", "E09", "W06")
+
+. 
+. tab is_local_authority
+
+is_local_au |
+    thority |      Freq.     Percent        Cum.
+------------+-----------------------------------
+          0 |        864       19.13       19.13
+          1 |      3,653       80.87      100.00
+------------+-----------------------------------
+      Total |      4,517      100.00
+
+. 
+. 
+. 
+. * ============================================================
+. * 12. LABEL LOCAL-AUTHORITY TYPES
+. * ============================================================
+. 
+. * Allocate enough string space from the beginning so Stata
+. * does not repeatedly enlarge the variable.
+. gen str33 local_authority_type = ""
+(4,517 missing values generated)
+
+. 
+. replace local_authority_type = ///
+>     "English unitary authority" ///
+>     if geography_prefix == "E06"
+(651 real changes made)
+
+. 
+. replace local_authority_type = ///
+>     "English non-metropolitan district" ///
+>     if geography_prefix == "E07"
+(2,001 real changes made)
+
+. 
+. replace local_authority_type = ///
+>     "English metropolitan district" ///
+>     if geography_prefix == "E08"
+(396 real changes made)
+
+. 
+. replace local_authority_type = ///
+>     "London borough" ///
+>     if geography_prefix == "E09"
+(363 real changes made)
+
+. 
+. replace local_authority_type = ///
+>     "Welsh unitary authority" ///
+>     if geography_prefix == "W06"
+(242 real changes made)
+
+. 
+. tab local_authority_type ///
+>     if is_local_authority == 1
+
+             local_authority_type |      Freq.     Percent        Cum.
+----------------------------------+-----------------------------------
+    English metropolitan district |        396       10.84       10.84
+English non-metropolitan district |      2,001       54.78       65.62
+        English unitary authority |        651       17.82       83.44
+                   London borough |        363        9.94       93.38
+          Welsh unitary authority |        242        6.62      100.00
+----------------------------------+-----------------------------------
+                            Total |      3,653      100.00
+
+. 
+. 
+. 
+. * ============================================================
+. * 13. KEEP LOCAL AUTHORITIES
+. * ============================================================
+. 
+. keep if is_local_authority == 1
+(864 observations deleted)
+
+. 
+. * Number of local-authority observations by year.
+. tab year
+
+       year |      Freq.     Percent        Cum.
+------------+-----------------------------------
+       2015 |        348        9.53        9.53
+       2016 |        348        9.53       19.05
+       2017 |        348        9.53       28.58
+       2018 |        339        9.28       37.86
+       2019 |        336        9.20       47.06
+       2020 |        331        9.06       56.12
+       2021 |        331        9.06       65.18
+       2022 |        318        8.71       73.88
+       2023 |        318        8.71       82.59
+       2024 |        318        8.71       91.29
+       2025 |        318        8.71      100.00
+------------+-----------------------------------
+      Total |      3,653      100.00
+
+. 
+. * Check authority types retained.
+. tab local_authority_type
+
+             local_authority_type |      Freq.     Percent        Cum.
+----------------------------------+-----------------------------------
+    English metropolitan district |        396       10.84       10.84
+English non-metropolitan district |      2,001       54.78       65.62
+        English unitary authority |        651       17.82       83.44
+                   London borough |        363        9.94       93.38
+          Welsh unitary authority |        242        6.62      100.00
+----------------------------------+-----------------------------------
+                            Total |      3,653      100.00
+
+. 
+. * Area + year must remain unique.
+. isid geography_code year
+
+. 
+. 
+. 
+. * ============================================================
+. * 14. RECHECK EARNINGS QUALITY AFTER GEOGRAPHY FILTER
+. * ============================================================
+. 
+. * Recalculate the relevant missingness summary for the
+. * actual local-authority dataset used by the project.
+. tab year missing_pay, row
+
++----------------+
+| Key            |
+|----------------|
+|   frequency    |
+| row percentage |
++----------------+
+
+           |      missing_pay
+      year |         0          1 |     Total
+-----------+----------------------+----------
+      2015 |       326         22 |       348 
+           |     93.68       6.32 |    100.00 
+-----------+----------------------+----------
+      2016 |       335         13 |       348 
+           |     96.26       3.74 |    100.00 
+-----------+----------------------+----------
+      2017 |       331         17 |       348 
+           |     95.11       4.89 |    100.00 
+-----------+----------------------+----------
+      2018 |       327         12 |       339 
+           |     96.46       3.54 |    100.00 
+-----------+----------------------+----------
+      2019 |       322         14 |       336 
+           |     95.83       4.17 |    100.00 
+-----------+----------------------+----------
+      2020 |       321         10 |       331 
+           |     96.98       3.02 |    100.00 
+-----------+----------------------+----------
+      2021 |       324          7 |       331 
+           |     97.89       2.11 |    100.00 
+-----------+----------------------+----------
+      2022 |       294         24 |       318 
+           |     92.45       7.55 |    100.00 
+-----------+----------------------+----------
+      2023 |       295         23 |       318 
+           |     92.77       7.23 |    100.00 
+-----------+----------------------+----------
+      2024 |       316          2 |       318 
+           |     99.37       0.63 |    100.00 
+-----------+----------------------+----------
+      2025 |       316          2 |       318 
+           |     99.37       0.63 |    100.00 
+-----------+----------------------+----------
+     Total |     3,507        146 |     3,653 
+           |     96.00       4.00 |    100.00 
+
+. 
+. count if pay_suppressed == 1
+  145
+
+. count if pay_blank == 1
+  1
+
+. 
+. list geography_name ///
+>      geography_code ///
+>      year ///
+>      if pay_blank == 1, ///
+>      noobs clean
+
+     geography_name   geogra~de   year  
+    Isles of Scilly   E06000053   2019  
+
+. 
+. 
+. 
+. * ============================================================
+. * 15. SUMMARISE EARNINGS COVERAGE BY LOCAL AUTHORITY
+. * ============================================================
+. 
+. * Count usable earnings years for each authority.
+. bysort geography_code: egen years_with_pay = ///
+>     total(!missing(median_annual_pay))
+
+. 
+. 
+. * Count how many years each authority appears in the data.
+. bysort geography_code: gen years_observed = _N
+
+. 
+. 
+. * Share of observed years with usable earnings.
+. gen pay_coverage_rate = ///
+>     years_with_pay / years_observed
+
+. 
+. 
+. * Tag one row per authority so summaries count authorities,
+. * not repeated area-year observations.
+. egen authority_tag = tag(geography_code)
+
+. 
+. 
+. * Distribution of usable earnings years by authority.
+. tab years_with_pay ///
+>     if authority_tag == 1
+
+years_with_ |
+        pay |      Freq.     Percent        Cum.
+------------+-----------------------------------
+          0 |          2        0.55        0.55
+          1 |          1        0.28        0.83
+          2 |          6        1.66        2.49
+          3 |         10        2.76        5.25
+          4 |         10        2.76        8.01
+          5 |          6        1.66        9.67
+          6 |          7        1.93       11.60
+          7 |         12        3.31       14.92
+          8 |          7        1.93       16.85
+          9 |         19        5.25       22.10
+         10 |         61       16.85       38.95
+         11 |        221       61.05      100.00
+------------+-----------------------------------
+      Total |        362      100.00
+
+. 
+. 
+. * Distribution of years observed by authority.
+. tab years_observed ///
+>     if authority_tag == 1
+
+years_obser |
+        ved |      Freq.     Percent        Cum.
+------------+-----------------------------------
+          2 |          2        0.55        0.55
+          3 |         14        3.87        4.42
+          4 |          9        2.49        6.91
+          5 |          7        1.93        8.84
+          6 |          2        0.55        9.39
+          7 |         17        4.70       14.09
+          8 |          4        1.10       15.19
+          9 |          2        0.55       15.75
+         11 |        305       84.25      100.00
+------------+-----------------------------------
+      Total |        362      100.00
+
+. 
+. 
+. * Overall coverage rate across authorities.
+. summarize pay_coverage_rate ///
+>     if authority_tag == 1
+
+    Variable |        Obs        Mean    Std. dev.       Min        Max
+-------------+---------------------------------------------------------
+pay_covera~e |        362    .9578586    .1071511          0          1
+
+. 
+. 
+. * Diagnostic only:
+. * authorities with less than 80% usable earnings coverage.
+. list geography_name ///
+>      geography_code ///
+>      years_observed ///
+>      years_with_pay ///
+>      pay_coverage_rate ///
+>      if authority_tag == 1 ///
+>      & pay_coverage_rate < 0.80, ///
+>      noobs clean
+
+            geography_name   geogra~de   years_~d   years_~y   pay_co~e
+>   
+        Isles of Scilly UA   E06000053         11          0          0
+>   
+               South Bucks   E07000006          4          3        .75
+>   
+              Christchurch   E07000048          3          2   .6666667
+>   
+               East Dorset   E07000049          3          2   .6666667
+>   
+              North Dorset   E07000050          3          2   .6666667
+>   
+                    Maldon   E07000074         11          8   .7272727
+>   
+                  Cotswold   E07000079         11          8   .7272727
+>   
+             West Somerset   E07000191          3          1   .3333333
+>   
+              Forest Heath   E07000201          3          2   .6666667
+>   
+               Mole Valley   E07000210         11          8   .7272727
+>   
+            City of London   E09000001         11          0          0
+>   
+    Kensington and Chelsea   E09000020         11          4   .3636364
+>   
+
+. 
+. 
+. 
+. * ============================================================
+. * 16. SAVE GENERATED LOCAL-AUTHORITY EARNINGS DATA
+. * ============================================================
+. 
+. sort geography_code year
+
+. 
+. save ///
+> "$derived/earnings_local_authorities_2015_2025.dta", ///
+> replace
+(file ./output/derived_data/earnings_local_authorities_2015_2025.dta
+    not found)
+file ./output/derived_data/earnings_local_authorities_2015_2025.dta
+    saved
+
+. 
+. 
+. 
+. * ============================================================
+. * STEP 2: PREPARE HOUSE-PRICE DATA
+. * ============================================================
+. 
+. 
+. * ============================================================
+. * 17. IMPORT THE LOCAL-AUTHORITY HOUSE-PRICE TABLE
+. * ============================================================
+. 
+. * ONS Table 2a contains median price paid by local authority.
+. *
+. * The workbook reports rolling annual prices quarterly.
+. * We use Year Ending September for each year because this
+. * aligns the annual housing period with the ASHE earnings year.
+. 
+. import excel using ///
+> "$houseprices/medianpricepaidforadministrativegeographies.xlsx", ///
+> sheet("2a") ///
+> cellrange(A1:DT321) ///
+> allstring ///
+> clear
+(124 vars, 321 obs)
+
+. 
+. 
+. 
+. * ============================================================
+. * 18. KEEP THE VARIABLES NEEDED FOR THE ANALYSIS
+. * ============================================================
+. 
+. * A-D identify the geography.
+. *
+. * Annual price columns used:
+. *
+. * CF = Year ending Sep 2015
+. * CJ = Year ending Sep 2016
+. * CN = Year ending Sep 2017
+. * CR = Year ending Sep 2018
+. * CV = Year ending Sep 2019
+. * CZ = Year ending Sep 2020
+. * DD = Year ending Sep 2021
+. * DH = Year ending Sep 2022
+. * DL = Year ending Sep 2023
+. * DP = Year ending Sep 2024
+. * DT = Year ending Sep 2025
+. 
+. keep A B C D ///
+>      CF CJ CN CR CV CZ ///
+>      DD DH DL DP DT
+
+. 
+. 
+. 
+. * ============================================================
+. * 19. RENAME HOUSE-PRICE VARIABLES
+. * ============================================================
+. 
+. rename A region_code
+
+. rename B region_name
+
+. rename C geography_code
+
+. rename D geography_name
+
+. 
+. rename CF house_price2015
+
+. rename CJ house_price2016
+
+. rename CN house_price2017
+
+. rename CR house_price2018
+
+. rename CV house_price2019
+
+. rename CZ house_price2020
+
+. rename DD house_price2021
+
+. rename DH house_price2022
+
+. rename DL house_price2023
+
+. rename DP house_price2024
+
+. rename DT house_price2025
+
+. 
+. 
+. 
+. * ============================================================
+. * 20. KEEP VALID LOCAL-AUTHORITY ROWS
+. * ============================================================
+. 
+. replace region_code    = strtrim(region_code)
+(0 real changes made)
+
+. replace region_name    = strtrim(region_name)
+(0 real changes made)
+
+. replace geography_code = strtrim(geography_code)
+(0 real changes made)
+
+. replace geography_name = strtrim(geography_name)
+(0 real changes made)
+
+. 
+. 
+. gen geography_prefix = ///
+>     substr(geography_code, 1, 3)
+(2 missing values generated)
+
+. 
+. 
+. * Apply the same local-authority definition used for earnings.
+. keep if inlist(geography_prefix, ///
+>     "E06", "E07", "E08", "E09", "W06")
+(3 observations deleted)
+
+. 
+. 
+. * In wide format, each geography code should occur once.
+. isid geography_code
+
+. 
+. 
+. 
+. * ============================================================
+. * 21. RESHAPE HOUSE PRICES FROM WIDE TO LONG
+. * ============================================================
+. 
+. * Before reshape:
+. *
+. * authority | 2015 price | 2016 price | ...
+. *
+. * After reshape:
+. *
+. * authority | year | price
+. 
+. reshape long house_price, ///
+>     i(geography_code) ///
+>     j(year)
+(j = 2015 2016 2017 2018 2019 2020 2021 2022 2023 2024 2025)
+
+Data                               Wide   ->   Long
+-----------------------------------------------------------------------
+> ------
+Number of observations              318   ->   3,498       
+Number of variables                  16   ->   7           
+j variable (11 values)                    ->   year
+xij variables:
+house_price2015 house_price2016 ... house_price2025->house_price
+-----------------------------------------------------------------------
+> ------
+
+. 
+. sort geography_code year
+
+. 
+. 
+. 
+. * ============================================================
+. * 22. CREATE NUMERIC HOUSE-PRICE VARIABLE
+. * ============================================================
+. 
+. * Preserve the source value before numeric conversion.
+. rename house_price median_house_price_raw
+
+. 
+. 
+. * Convert source text into numeric house prices.
+. destring median_house_price_raw, ///
+>     generate(median_house_price) ///
+>     ignore(",") ///
+>     force
+median_house_price_raw: all characters numeric; median_house_price gene
+> rated as long
+
+. 
+. 
+. 
+. * ============================================================
+. * 23. CHECK HOUSE-PRICE DATA QUALITY
+. * ============================================================
+. 
+. gen missing_house_price = ///
+>     missing(median_house_price)
+
+. 
+. 
+. * Availability by year.
+. tab year missing_house_price, row
+
++----------------+
+| Key            |
+|----------------|
+|   frequency    |
+| row percentage |
++----------------+
+
+           | missing_ho
+           | use_price
+      year |         0 |     Total
+-----------+-----------+----------
+      2015 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2016 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2017 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2018 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2019 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2020 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2021 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2022 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2023 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2024 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+      2025 |       318 |       318 
+           |    100.00 |    100.00 
+-----------+-----------+----------
+     Total |     3,498 |     3,498 
+           |    100.00 |    100.00 
+
+. 
+. 
+. * Inspect original source values if any price becomes missing.
+. tab median_house_price_raw ///
+>     if missing_house_price == 1, ///
+>     missing
+no observations
+
+. 
+. 
+. * One row per authority-year.
+. isid geography_code year
+
+. 
+. 
+. * Basic annual reasonableness check.
+. tabstat median_house_price, ///
+>     by(year) ///
+>     statistics(count median mean min max)
+
+Summary for variables: median_house_price
+Group variable: year 
+
+    year |         N       p50      Mean       Min       Max
+---------+--------------------------------------------------
+    2015 |       318    197500  227704.9     77500   1195000
+    2016 |       318    210000  245198.3     79950   1165000
+    2017 |       318    225000  260498.2     83000   1300000
+    2018 |       318    235000  268535.5     83000   1450000
+    2019 |       318    243250  272097.3     89950   1300000
+    2020 |       318    250000  280057.4     94000   1250000
+    2021 |       318    275499  304449.1    110000   1250000
+    2022 |       318    288750  315179.7    125000   1450000
+    2023 |       318    303596  324937.5    117500   1296750
+    2024 |       318    290800  321591.9    125000   1250000
+    2025 |       318    296000  324955.7    130000   1150000
+---------+--------------------------------------------------
+   Total |      3498    251500  285927.8     77500   1450000
+------------------------------------------------------------
+
+. 
+. 
+. 
+. * ============================================================
+. * 24. SAVE GENERATED CLEAN HOUSE-PRICE DATA
+. * ============================================================
+. 
+. sort geography_code year
+
+. 
+. save ///
+> "$derived/house_prices_local_authorities_2015_2025.dta", ///
+> replace
+(file
+    ./output/derived_data/house_prices_local_authorities_2015_2025.dt
+    > a not found)
+file
+    ./output/derived_data/house_prices_local_authorities_2015_2025.dt
+    > a saved
+
+. 
+. 
+. 
+. * ============================================================
+. * STEP 3: COMBINE HOUSE PRICES AND EARNINGS
+. * ============================================================
+. 
+. 
+. * ============================================================
+. * 25. MERGE HOUSE PRICES WITH EARNINGS
+. * ============================================================
+. 
+. * The clean house-price data are still in memory.
+. *
+. * Match using:
+. * geography_code + year
+. 
+. merge 1:1 geography_code year using ///
+> "$derived/earnings_local_authorities_2015_2025.dta", ///
+> keepusing( ///
+>     median_annual_pay_raw ///
+>     median_annual_pay ///
+>     missing_pay ///
+>     pay_suppressed ///
+>     pay_blank ///
+>     provisional ///
+>     local_authority_type ///
+> )
+(variable year was int, now float to accommodate using data's values)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                           299
+        from master                        72  (_merge==1)
+        from using                        227  (_merge==2)
+
+    Matched                             3,426  (_merge==3)
+    -----------------------------------------
+
+. 
+. 
+. 
+. * ============================================================
+. * 26. CHECK THE MERGE
+. * ============================================================
+. 
+. * _merge = 1 -> house price only
+. * _merge = 2 -> earnings only
+. * _merge = 3 -> successful match
+. 
+. tab _merge
+
+   Matching result from |
+                  merge |      Freq.     Percent        Cum.
+------------------------+-----------------------------------
+        Master only (1) |         72        1.93        1.93
+         Using only (2) |        227        6.09        8.03
+            Matched (3) |      3,426       91.97      100.00
+------------------------+-----------------------------------
+                  Total |      3,725      100.00
+
+. 
+. tab year _merge
+
+           |    Matching result from merge
+      year | Master on  Using onl  Matched ( |     Total
+-----------+---------------------------------+----------
+      2015 |        13         43        305 |       361 
+      2016 |        13         43        305 |       361 
+      2017 |        13         43        305 |       361 
+      2018 |         9         30        309 |       348 
+      2019 |         8         26        310 |       344 
+      2020 |         6         19        312 |       337 
+      2021 |         6         19        312 |       337 
+      2022 |         2          2        316 |       320 
+      2023 |         2          2        316 |       320 
+      2024 |         0          0        318 |       318 
+      2025 |         0          0        318 |       318 
+-----------+---------------------------------+----------
+     Total |        72        227      3,426 |     3,725 
+
+. 
+. 
+. 
+. * ============================================================
+. * 27. INSPECT UNMATCHED LOCAL AUTHORITIES
+. * ============================================================
+. 
+. * Geography reorganisations can create unmatched historical
+. * codes, so we inspect them before filtering.
+. 
+. preserve
+
+. 
+. keep if _merge != 3
+(3,426 observations deleted)
+
+. 
+. contract geography_name ///
+>          geography_code ///
+>          _merge
+
+. 
+. rename _freq unmatched_years
+
+. 
+. sort _merge geography_name
+
+. 
+. list geography_name ///
+>      geography_code ///
+>      _merge ///
+>      unmatched_years, ///
+>      sepby(_merge) ///
+>      noobs clean
+
+                         geography_name   geogra~de            _merge  
+>  unmatc~s  
+                               Barnsley   E08000038   Master only (1)  
+>         9  
+    Bournemouth, Christchurch and Poole   E06000058   Master only (1)  
+>         3  
+                        Buckinghamshire   E06000060   Master only (1)  
+>         4  
+                             Cumberland   E06000063   Master only (1)  
+>         7  
+                                 Dorset   E06000059   Master only (1)  
+>         3  
+                           East Suffolk   E07000244   Master only (1)  
+>         3  
+                 North Northamptonshire   E06000061   Master only (1)  
+>         5  
+                        North Yorkshire   E06000065   Master only (1)  
+>         7  
+                              Sheffield   E08000039   Master only (1)  
+>         9  
+                               Somerset   E06000066   Master only (1)  
+>         7  
+                  West Northamptonshire   E06000062   Master only (1)  
+>         5  
+                           West Suffolk   E07000245   Master only (1)  
+>         3  
+                Westmorland and Furness   E06000064   Master only (1)  
+>         7  
+                                          E07000052    Using only (2)  
+>         3  
+                                          E07000029    Using only (2)  
+>         7  
+                                          E07000153    Using only (2)  
+>         5  
+                                          E07000004    Using only (2)  
+>         4  
+                                          E07000151    Using only (2)  
+>         5  
+                                          E07000188    Using only (2)  
+>         7  
+                                          E07000154    Using only (2)  
+>         5  
+                                          E07000027    Using only (2)  
+>         7  
+                                          E07000053    Using only (2)  
+>         3  
+                                          E07000049    Using only (2)  
+>         3  
+                                          E07000155    Using only (2)  
+>         5  
+                                          E07000156    Using only (2)  
+>         5  
+                                          E07000167    Using only (2)  
+>         7  
+                                          E07000006    Using only (2)  
+>         4  
+                                          E07000028    Using only (2)  
+>         7  
+                                          E07000031    Using only (2)  
+>         7  
+                                          E07000164    Using only (2)  
+>         7  
+                                          E07000201    Using only (2)  
+>         3  
+                                          E07000150    Using only (2)  
+>         5  
+                                          E07000189    Using only (2)  
+>         7  
+                                          E07000050    Using only (2)  
+>         3  
+                                          E07000187    Using only (2)  
+>         7  
+                                          E07000246    Using only (2)  
+>         4  
+                                          E07000166    Using only (2)  
+>         7  
+                                          E07000206    Using only (2)  
+>         3  
+                                          E07000026    Using only (2)  
+>         7  
+                                          E06000029    Using only (2)  
+>         3  
+                                          E07000168    Using only (2)  
+>         7  
+                                          E08000019    Using only (2)  
+>         9  
+                                          E07000005    Using only (2)  
+>         4  
+                                          E07000030    Using only (2)  
+>         7  
+                                          E07000190    Using only (2)  
+>         3  
+                                          E07000169    Using only (2)  
+>         7  
+                                          E07000205    Using only (2)  
+>         3  
+                                          E07000163    Using only (2)  
+>         7  
+                                          E07000165    Using only (2)  
+>         7  
+                                          E07000051    Using only (2)  
+>         3  
+                                          E07000007    Using only (2)  
+>         4  
+                                          E07000048    Using only (2)  
+>         3  
+                                          E07000152    Using only (2)  
+>         5  
+                                          E07000204    Using only (2)  
+>         3  
+                                          E06000028    Using only (2)  
+>         3  
+                                          E07000191    Using only (2)  
+>         3  
+                                          E08000016    Using only (2)  
+>         9  
+
+. 
+. restore
+
+. 
+. 
+. 
+. * ============================================================
+. * 28. SAVE THE GENERATED PRE-FILTER MERGE AUDIT DATASET
+. * ============================================================
+. 
+. save ///
+> "$derived/housing_earnings_merge_check_2015_2025.dta", ///
+> replace
+(file
+    ./output/derived_data/housing_earnings_merge_check_2015_2025.dta
+    not found)
+file ./output/derived_data/housing_earnings_merge_check_2015_2025.dta
+    saved
+
+. 
+. 
+. 
+. * ============================================================
+. * STEP 4: CREATE A CONSISTENT GEOGRAPHY SAMPLE
+. * ============================================================
+. 
+. 
+. * ============================================================
+. * 29. IDENTIFY AUTHORITIES MATCHED IN ALL 11 YEARS
+. * ============================================================
+. 
+. * 1 = price and earnings records matched.
+. gen matched_record = (_merge == 3)
+
+. 
+. 
+. * Count successful matched years for each code.
+. bysort geography_code: egen years_matched = ///
+>     total(matched_record)
+
+. 
+. 
+. * Tag each geography code once.
+. egen stable_authority_tag = ///
+>     tag(geography_code)
+
+. 
+. 
+. * Inspect how many codes have 11 successful years.
+. tab years_matched ///
+>     if stable_authority_tag == 1
+
+years_match |
+         ed |      Freq.     Percent        Cum.
+------------+-----------------------------------
+          0 |         44       12.15       12.15
+          2 |          2        0.55       12.71
+          4 |          4        1.10       13.81
+          6 |          2        0.55       14.36
+          7 |          1        0.28       14.64
+          8 |          4        1.10       15.75
+         11 |        305       84.25      100.00
+------------+-----------------------------------
+      Total |        362      100.00
+
+. 
+. 
+. 
+. * ============================================================
+. * 30. KEEP THE CONSISTENT 2015-2025 SAMPLE
+. * ============================================================
+. 
+. * Keep codes that successfully match for every year.
+. *
+. * This avoids comparing different historical authority
+. * structures as though they were the same geography.
+. keep if years_matched == 11
+(370 observations deleted)
+
+. 
+. 
+. * All remaining records should now be matched.
+. tab _merge
+
+   Matching result from |
+                  merge |      Freq.     Percent        Cum.
+------------------------+-----------------------------------
+            Matched (3) |      3,355      100.00      100.00
+------------------------+-----------------------------------
+                  Total |      3,355      100.00
+
+. 
+. 
+. * There should be the same number of authorities each year.
+. tab year
+
+       year |      Freq.     Percent        Cum.
+------------+-----------------------------------
+       2015 |        305        9.09        9.09
+       2016 |        305        9.09       18.18
+       2017 |        305        9.09       27.27
+       2018 |        305        9.09       36.36
+       2019 |        305        9.09       45.45
+       2020 |        305        9.09       54.55
+       2021 |        305        9.09       63.64
+       2022 |        305        9.09       72.73
+       2023 |        305        9.09       81.82
+       2024 |        305        9.09       90.91
+       2025 |        305        9.09      100.00
+------------+-----------------------------------
+      Total |      3,355      100.00
+
+. 
+. 
+. * Authority + year remains unique.
+. isid geography_code year
+
+. 
+. 
+. * Tag one row per authority for later summaries.
+. egen analysis_authority_tag = ///
+>     tag(geography_code)
+
+. 
+. 
+. * Number of unique consistently matched authorities.
+. count if analysis_authority_tag == 1
+  305
+
+. 
+. 
+. 
+. * ============================================================
+. * STEP 5: CALCULATE HOUSING AFFORDABILITY
+. * ============================================================
+. 
+. 
+. * ============================================================
+. * 31. CALCULATE THE AFFORDABILITY RATIO
+. * ============================================================
+. 
+. * Affordability ratio:
+. *
+. * median house price / median annual full-time earnings
+. *
+. * Example:
+. * £200,000 / £40,000 = 5
+. *
+. * Interpretation:
+. * the median house costs five times annual median earnings.
+. 
+. gen affordability_ratio = ///
+>     median_house_price / median_annual_pay ///
+>     if !missing(median_house_price, median_annual_pay)
+(133 missing values generated)
+
+. 
+. 
+. label variable affordability_ratio ///
+>     "Median house price / median annual earnings"
+
+. 
+. 
+. 
+. * ============================================================
+. * 32. CHECK AFFORDABILITY DATA AVAILABILITY
+. * ============================================================
+. 
+. gen missing_affordability = ///
+>     missing(affordability_ratio)
+
+. 
+. 
+. tab year missing_affordability, row
+
++----------------+
+| Key            |
+|----------------|
+|   frequency    |
+| row percentage |
++----------------+
+
+           | missing_affordability
+      year |         0          1 |     Total
+-----------+----------------------+----------
+      2015 |       286         19 |       305 
+           |     93.77       6.23 |    100.00 
+-----------+----------------------+----------
+      2016 |       294         11 |       305 
+           |     96.39       3.61 |    100.00 
+-----------+----------------------+----------
+      2017 |       294         11 |       305 
+           |     96.39       3.61 |    100.00 
+-----------+----------------------+----------
+      2018 |       293         12 |       305 
+           |     96.07       3.93 |    100.00 
+-----------+----------------------+----------
+      2019 |       292         13 |       305 
+           |     95.74       4.26 |    100.00 
+-----------+----------------------+----------
+      2020 |       296          9 |       305 
+           |     97.05       2.95 |    100.00 
+-----------+----------------------+----------
+      2021 |       298          7 |       305 
+           |     97.70       2.30 |    100.00 
+-----------+----------------------+----------
+      2022 |       281         24 |       305 
+           |     92.13       7.87 |    100.00 
+-----------+----------------------+----------
+      2023 |       282         23 |       305 
+           |     92.46       7.54 |    100.00 
+-----------+----------------------+----------
+      2024 |       303          2 |       305 
+           |     99.34       0.66 |    100.00 
+-----------+----------------------+----------
+      2025 |       303          2 |       305 
+           |     99.34       0.66 |    100.00 
+-----------+----------------------+----------
+     Total |     3,222        133 |     3,355 
+           |     96.04       3.96 |    100.00 
+
+. 
+. 
+. * Annual distribution.
+. tabstat affordability_ratio, ///
+>     by(year) ///
+>     statistics(count median mean min max)
+
+Summary for variables: affordability_ratio
+Group variable: year 
+
+    year |         N       p50      Mean       Min       Max
+---------+--------------------------------------------------
+    2015 |       286  7.207485  7.729708  3.389094  20.51572
+    2016 |       294  7.595877  8.136116  3.483205  23.48487
+    2017 |       294  7.908669  8.441406  3.192553  24.79411
+    2018 |       293  8.122189   8.54159  3.324388  23.70728
+    2019 |       292  8.117928  8.360653  3.306595  21.34576
+    2020 |       296  8.049296  8.387423  3.587239  22.44971
+    2021 |       298  9.146836  9.329952  3.963107  24.77357
+    2022 |       281   8.87413  9.072328  4.288731  34.76635
+    2023 |       282  8.839861  8.748704  3.818158   21.0958
+    2024 |       303  8.075191  8.217266  3.697278  23.81587
+    2025 |       303  7.703712  7.979724  3.858576   21.8731
+---------+--------------------------------------------------
+   Total |      3222  8.069495  8.446814  3.192553  34.76635
+------------------------------------------------------------
+
+. 
+. 
+. 
+. * ============================================================
+. * 33. CHECK EXTREME AFFORDABILITY VALUES
+. * ============================================================
+. 
+. summarize affordability_ratio, detail
+
+         Median house price / median annual earnings
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%     4.118648       3.192553
+ 5%     4.864514       3.306595
+10%     5.240791       3.324388       Obs               3,222
+25%     6.212939       3.389094       Sum of wgt.       3,222
+
+50%     8.069495                      Mean           8.446814
+                        Largest       Std. dev.      2.892572
+75%     10.08471       24.37293
+90%     12.12775       24.77357       Variance       8.366976
+95%     13.43683       24.79411       Skewness       1.315222
+99%     17.28766       34.76635       Kurtosis       7.346805
+
+. 
+. 
+. * Threshold >20 is for inspection only.
+. * No observations are removed.
+. list geography_name ///
+>      year ///
+>      median_house_price ///
+>      median_annual_pay ///
+>      affordability_ratio ///
+>      if affordability_ratio > 20 ///
+>      & !missing(affordability_ratio), ///
+>      sepby(year) ///
+>      noobs clean
+
+            geography_name   year   median~e   median~y   afford~o  
+    Hammersmith and Fulham   2018     790000      39420   20.04059  
+    Kensington and Chelsea   2021    1250000      50457   24.77357  
+    Kensington and Chelsea   2024    1250000      52486   23.81587  
+    Kensington and Chelsea   2022    1450000      41707   34.76635  
+    Kensington and Chelsea   2025    1150000      52576    21.8731  
+               Westminster   2021     904000      42062   21.49208  
+               Westminster   2020    1000000      44544   22.44971  
+               Westminster   2022    1099000      45091   24.37293  
+               Westminster   2018    1060000      44712   23.70728  
+               Westminster   2023    1075000      50958    21.0958  
+               Westminster   2016     980000      41729   23.48487  
+               Westminster   2019     939000      43990   21.34576  
+               Westminster   2015     878750      42833   20.51572  
+               Westminster   2017    1068750      43105   24.79411  
+
+. 
+. 
+. 
+. * ============================================================
+. * 34. SUMMARISE PRICES, EARNINGS AND AFFORDABILITY BY YEAR
+. * ============================================================
+. 
+. tabstat ///
+>     median_house_price ///
+>     median_annual_pay ///
+>     affordability_ratio, ///
+>     by(year) ///
+>     statistics(count median mean)
+
+Summary statistics: N, p50, Mean
+Group variable: year 
+
+    year |  median~e  median~y  afford~o
+---------+------------------------------
+    2015 |       305       286       286
+         |    199000   27256.5  7.207485
+         |  229194.5  27938.12  7.729708
+---------+------------------------------
+    2016 |       305       294       294
+         |    210000   27823.5  7.595877
+         |  246970.9  28608.76  8.136116
+---------+------------------------------
+    2017 |       305       294       294
+         |    225000     28290  7.908669
+         |  262317.9  29262.35  8.441406
+---------+------------------------------
+    2018 |       305       293       293
+         |    235000     29313  8.122189
+         |  270357.6  29944.43   8.54159
+---------+------------------------------
+    2019 |       305       292       292
+         |    244975   29768.5  8.117928
+         |  273921.9  30714.17  8.360653
+---------+------------------------------
+    2020 |       305       296       296
+         |    250000     30895  8.049296
+         |  281950.2  31868.18  8.387423
+---------+------------------------------
+    2021 |       305       298       298
+         |    277000     30558  9.146836
+         |  306286.9  31603.14  9.329952
+---------+------------------------------
+    2022 |       305       281       281
+         |    293500     32481   8.87413
+         |  317106.5  33413.46  9.072328
+---------+------------------------------
+    2023 |       305       282       282
+         |    307500   34364.5  8.839861
+         |  326880.5  35507.27  8.748704
+---------+------------------------------
+    2024 |       305       303       303
+         |    293500     36815  8.075191
+         |  323536.4  38001.91  8.217266
+---------+------------------------------
+    2025 |       305       303       303
+         |    300000     38432  7.703712
+         |  326822.9  39623.35  7.979724
+---------+------------------------------
+   Total |      3355      3222      3222
+         |    254995   31699.5  8.069495
+         |  287758.7   32439.5  8.446814
+----------------------------------------
+
+. 
+. 
+. 
+. * ============================================================
+. * 35. INSPECT 2025 AFFORDABILITY EXTREMES
+. * ============================================================
+. 
+. preserve
+
+. 
+. keep if year == 2025
+(3,050 observations deleted)
+
+. 
+. drop if missing(affordability_ratio)
+(2 observations deleted)
+
+. 
+. 
+. * Highest ratios = least affordable relative to earnings.
+. gsort -affordability_ratio
+
+. 
+. display ///
+> "TEN HIGHEST AFFORDABILITY RATIOS IN 2025"
+TEN HIGHEST AFFORDABILITY RATIOS IN 2025
+
+. 
+. list geography_name ///
+>      median_house_price ///
+>      median_annual_pay ///
+>      affordability_ratio ///
+>      in 1/10, ///
+>      noobs clean
+
+            geography_name   median~e   median~y   afford~o  
+    Kensington and Chelsea    1150000      52576    21.8731  
+               Westminster     865000      52610   16.44174  
+    Hammersmith and Fulham     700000      47192   14.83302  
+                    Camden     770000      53133   14.49194  
+                     Brent     555000      39944   13.89445  
+               Mole Valley     580000      42937   13.50816  
+                    Ealing     540000      40889   13.20649  
+                  Haringey     572750      43995   13.01853  
+      Richmond upon Thames     720000      57233   12.58015  
+                 Elmbridge     650000      51924    12.5183  
+
+. 
+. 
+. * Lowest ratios = more affordable relative to earnings.
+. sort affordability_ratio
+
+. 
+. display ///
+> "TEN LOWEST AFFORDABILITY RATIOS IN 2025"
+TEN LOWEST AFFORDABILITY RATIOS IN 2025
+
+. 
+. list geography_name ///
+>      median_house_price ///
+>      median_annual_pay ///
+>      affordability_ratio ///
+>      in 1/10, ///
+>      noobs clean
+
+                 geography_name   median~e   median~y   afford~o  
+                       Hyndburn     135000      34987   3.858576  
+                        Burnley     130000      33208   3.914719  
+                 Merthyr Tydfil     140000      35152   3.982704  
+                  Blaenau Gwent     140000      34797   4.023335  
+                      Blackpool     136000      31858   4.268943  
+                  County Durham     143000      33436   4.276827  
+                  Middlesbrough     153500      35177   4.363647  
+    Kingston upon Hull, City of     140000      31419   4.455903  
+              Neath Port Talbot     164998      36359   4.538023  
+              Rhondda Cynon Taf     160000      34837   4.592818  
+
+. 
+. restore
+
+. 
+. 
+. 
+. * ============================================================
+. * STEP 6: ANALYSE 2015-2025 GROWTH
+. * ============================================================
+. 
+. 
+. * ============================================================
+. * 36. CREATE 2015 AND 2025 ENDPOINT VALUES
+. * ============================================================
+. 
+. * egen + cond() finds the value for a specific year
+. * within each local authority and copies it across that
+. * authority's rows.
+. 
+. bysort geography_code: egen house_price_2015 = ///
+>     max(cond(year == 2015, median_house_price, .))
+
+. 
+. bysort geography_code: egen house_price_2025 = ///
+>     max(cond(year == 2025, median_house_price, .))
+
+. 
+. 
+. bysort geography_code: egen earnings_2015 = ///
+>     max(cond(year == 2015, median_annual_pay, .))
+(209 missing values generated)
+
+. 
+. bysort geography_code: egen earnings_2025 = ///
+>     max(cond(year == 2025, median_annual_pay, .))
+(22 missing values generated)
+
+. 
+. 
+. 
+. * ============================================================
+. * 37. CALCULATE HOUSE-PRICE AND EARNINGS GROWTH
+. * ============================================================
+. 
+. gen house_price_growth = ///
+>     100 * ((house_price_2025 / house_price_2015) - 1) ///
+>     if !missing(house_price_2015, house_price_2025)
+
+. 
+. 
+. gen earnings_growth = ///
+>     100 * ((earnings_2025 / earnings_2015) - 1) ///
+>     if !missing(earnings_2015, earnings_2025)
+(209 missing values generated)
+
+. 
+. 
+. * Positive gap:
+. * house prices grew faster than earnings.
+. *
+. * Negative gap:
+. * earnings grew faster than house prices.
+. gen growth_gap = ///
+>     house_price_growth - earnings_growth ///
+>     if !missing(house_price_growth, earnings_growth)
+(209 missing values generated)
+
+. 
+. 
+. label variable house_price_growth ///
+>     "House-price growth, 2015-2025 (%)"
+
+. 
+. label variable earnings_growth ///
+>     "Earnings growth, 2015-2025 (%)"
+
+. 
+. label variable growth_gap ///
+>     "House-price growth minus earnings growth (percentage points)"
+
+. 
+. 
+. 
+. * ============================================================
+. * 38. SUMMARISE 2015-2025 GROWTH
+. * ============================================================
+. 
+. * Use one observation per local authority.
+. summarize ///
+>     house_price_growth ///
+>     earnings_growth ///
+>     growth_gap ///
+>     if analysis_authority_tag == 1, ///
+>     detail
+
+              House-price growth, 2015-2025 (%)
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -1.564723      -7.435508
+ 5%     26.92308      -4.109589
+10%     32.35294       -3.76569       Obs                 305
+25%           40      -1.564723       Sum of wgt.         305
+
+50%     47.64706                      Mean           47.61037
+                        Largest       Std. dev.      13.72776
+75%     55.55556       77.86885
+90%     65.49296       79.48718       Variance       188.4513
+95%     68.91892             84       Skewness      -.5213986
+99%     77.86885       85.54697       Kurtosis       5.018471
+
+               Earnings growth, 2015-2025 (%)
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%     21.60791       17.26885
+ 5%     27.44304       19.14605
+10%     30.86985       21.60791       Obs                 286
+25%      37.1619        22.0648       Sum of wgt.         286
+
+50%     41.67375                      Mean           42.21789
+                        Largest       Std. dev.      9.279826
+75%     46.95403       61.81589
+90%     53.66577       66.36462       Variance       86.11517
+95%     56.92234        80.1011       Skewness       .6391771
+99%     66.36462       91.97901       Kurtosis       6.216348
+
+          House-price growth minus earnings growth
+                     (percentage points)
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -28.77476      -43.98999
+ 5%    -19.40935      -34.84977
+10%    -13.20824      -28.77476       Obs                 286
+25%    -4.600307      -28.73264       Sum of wgt.         286
+
+50%     5.684628                      Mean           5.618816
+                        Largest       Std. dev.       14.8998
+75%     15.61717       40.29958
+90%     24.34602       40.36525       Variance        222.004
+95%     30.76301       40.42119       Skewness      -.1172174
+99%     40.36525       41.38274       Kurtosis       3.064643
+
+. 
+. 
+. count if analysis_authority_tag == 1 ///
+>     & !missing(growth_gap)
+  286
+
+. 
+. 
+. 
+. * ============================================================
+. * 39. IDENTIFY LARGE GROWTH GAPS
+. * ============================================================
+. 
+. preserve
+
+. 
+. keep if analysis_authority_tag == 1
+(3,050 observations deleted)
+
+. 
+. drop if missing(growth_gap)
+(19 observations deleted)
+
+. 
+. 
+. * Areas where house prices most outpaced earnings.
+. gsort -growth_gap
+
+. 
+. display ///
+> "AREAS WHERE HOUSE PRICES MOST OUTPACED EARNINGS, 2015-2025"
+AREAS WHERE HOUSE PRICES MOST OUTPACED EARNINGS, 2015-2025
+
+. 
+. list geography_name ///
+>      house_price_growth ///
+>      earnings_growth ///
+>      growth_gap ///
+>      in 1/10, ///
+>      noobs clean
+
+           geography_name   house_~h   earnin~h   growth~p  
+               Nottingham   77.77778   36.39504   41.38274  
+                    Luton   72.83951   32.41832   40.42119  
+                     Bury   70.81605    30.4508   40.36525  
+                  Salford         84   43.70042   40.29958  
+                 Broxtowe   68.91892    30.3932   38.52573  
+    Nuneaton and Bedworth   74.28571   39.23666   35.04905  
+                Leicester   85.54697   50.72606   34.82091  
+                Brentwood   53.84615   19.14605    34.7001  
+                 Sandwell   77.86885   43.66056   34.20829  
+                 Trafford    72.4537   39.09821    33.3555  
+
+. 
+. 
+. * Areas where earnings performed best relative to prices.
+. sort growth_gap
+
+. 
+. display ///
+> "AREAS WHERE EARNINGS PERFORMED BEST RELATIVE TO HOUSE PRICES, 2015-2
+> 025"
+AREAS WHERE EARNINGS PERFORMED BEST RELATIVE TO HOUSE PRICES, 2015-2025
+
+. 
+. list geography_name ///
+>      house_price_growth ///
+>      earnings_growth ///
+>      growth_gap ///
+>      in 1/10, ///
+>      noobs clean
+
+            geography_name   house_p~h   earnin~h   growth_~p  
+                     Fylde    36.11111    80.1011   -43.98999  
+                 Islington    8.178278   43.02805   -34.84977  
+    Hammersmith and Fulham   -4.109589   24.66517   -28.77476  
+             Tower Hamlets    22.15382   50.88646   -28.73264  
+                   Hackney    25.47323   53.89544   -28.42221  
+                   Lambeth    19.55556    47.4352   -27.87965  
+                 Southwark     17.3913   43.51287   -26.12156  
+            East Hampshire    36.12903   61.40838   -25.27935  
+               Westminster   -1.564723   22.82586   -24.39058  
+         Oadby and Wigston     68.0303   91.97901   -23.94871  
+
+. 
+. restore
+
+. 
+. 
+. 
+. * ============================================================
+. * STEP 7: MEASURE ACTUAL AFFORDABILITY CHANGE
+. * ============================================================
+. 
+. 
+. * ============================================================
+. * 40. CREATE 2015 AND 2025 AFFORDABILITY VALUES
+. * ============================================================
+. 
+. bysort geography_code: egen affordability_2015 = ///
+>     max(cond(year == 2015, affordability_ratio, .))
+(209 missing values generated)
+
+. 
+. bysort geography_code: egen affordability_2025 = ///
+>     max(cond(year == 2025, affordability_ratio, .))
+(22 missing values generated)
+
+. 
+. 
+. 
+. * ============================================================
+. * 41. CALCULATE AFFORDABILITY CHANGE
+. * ============================================================
+. 
+. * Ratio-point change.
+. *
+. * Positive = less affordable.
+. * Negative = more affordable.
+. 
+. gen affordability_change = ///
+>     affordability_2025 - affordability_2015 ///
+>     if !missing(affordability_2015, affordability_2025)
+(209 missing values generated)
+
+. 
+. 
+. * Percentage change in the ratio.
+. gen affordability_pct_change = ///
+>     100 * ((affordability_2025 / affordability_2015) - 1) ///
+>     if !missing(affordability_2015, affordability_2025)
+(209 missing values generated)
+
+. 
+. 
+. label variable affordability_change ///
+>     "Change in affordability ratio, 2015-2025"
+
+. 
+. label variable affordability_pct_change ///
+>     "Percentage change in affordability ratio, 2015-2025"
+
+. 
+. 
+. 
+. * ============================================================
+. * 42. SUMMARISE AFFORDABILITY CHANGE
+. * ============================================================
+. 
+. summarize ///
+>     affordability_2015 ///
+>     affordability_2025 ///
+>     affordability_change ///
+>     affordability_pct_change ///
+>     if analysis_authority_tag == 1, ///
+>     detail
+
+                     affordability_2015
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%     3.702958       3.389094
+ 5%     4.736149       3.448583
+10%     5.029865       3.702958       Obs                 286
+25%     5.626809       4.014094       Sum of wgt.         286
+
+50%     7.207485                      Mean           7.729708
+                        Largest       Std. dev.      2.682384
+75%     9.042134       16.30128
+90%     11.14389         17.202       Variance       7.195182
+95%     13.21923       19.28411       Skewness       1.334397
+99%       17.202       20.51572       Kurtosis       5.707501
+
+                     affordability_2025
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%     4.023335       3.858576
+ 5%     4.728404       3.914719
+10%     5.244805       3.982704       Obs                 303
+25%     6.224176       4.023335       Sum of wgt.         303
+
+50%     7.703712                      Mean           7.979724
+                        Largest       Std. dev.      2.380036
+75%     9.422403       14.49194
+90%     11.01087       14.83302       Variance       5.664571
+95%     12.07149       16.44174       Skewness       1.127923
+99%     14.49194        21.8731       Kurtosis       6.376183
+
+          Change in affordability ratio, 2015-2025
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -3.971919      -4.451089
+ 5%    -1.131051      -4.073982
+10%     -.774909      -3.971919       Obs                 286
+25%    -.2469292      -2.710066       Sum of wgt.         286
+
+50%     .3046873                      Mean           .1895678
+                        Largest       Std. dev.      .9134349
+75%     .7004523       1.686608
+90%     1.219004       1.733903       Variance       .8343634
+95%        1.441        2.12103       Skewness       -1.53004
+99%     1.733903       2.374517       Kurtosis       8.175727
+
+          Percentage change in affordability ratio,
+                          2015-2025
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -23.08164      -24.42517
+ 5%    -12.47465      -24.36569
+10%    -8.459579      -23.08164       Obs                 286
+25%    -3.315135      -19.85785       Sum of wgt.         286
+
+50%     4.040666                      Mean           4.285145
+                        Largest       Std. dev.      10.60928
+75%     11.42974        29.5458
+90%     18.51371       30.34035       Variance       112.5568
+95%     23.10211       30.52537       Skewness       .0373536
+99%     30.34035       30.94289       Kurtosis       2.972305
+
+. 
+. 
+. count if analysis_authority_tag == 1 ///
+>     & !missing(affordability_change)
+  286
+
+. 
+. 
+. 
+. * ============================================================
+. * 43. CLASSIFY THE DIRECTION OF CHANGE
+. * ============================================================
+. 
+. gen affordability_direction = .
+(3,355 missing values generated)
+
+. 
+. replace affordability_direction = 1 ///
+>     if affordability_change > 0 ///
+>     & !missing(affordability_change)
+(2,068 real changes made)
+
+. 
+. replace affordability_direction = 0 ///
+>     if affordability_change < 0 ///
+>     & !missing(affordability_change)
+(1,078 real changes made)
+
+. 
+. replace affordability_direction = 2 ///
+>     if affordability_change == 0
+(0 real changes made)
+
+. 
+. 
+. label define affordability_direction_lbl ///
+>     0 "More affordable" ///
+>     1 "Less affordable" ///
+>     2 "No change"
+
+. 
+. label values affordability_direction ///
+>     affordability_direction_lbl
+
+. 
+. 
+. * Count authorities, not repeated yearly records.
+. tab affordability_direction ///
+>     if analysis_authority_tag == 1
+
+affordability_d |
+       irection |      Freq.     Percent        Cum.
+----------------+-----------------------------------
+More affordable |         98       34.27       34.27
+Less affordable |        188       65.73      100.00
+----------------+-----------------------------------
+          Total |        286      100.00
+
+. 
+. 
+. 
+. * ============================================================
+. * 44. IDENTIFY THE LARGEST AFFORDABILITY CHANGES
+. * ============================================================
+. 
+. preserve
+
+. 
+. keep if analysis_authority_tag == 1
+(3,050 observations deleted)
+
+. 
+. drop if missing(affordability_change)
+(19 observations deleted)
+
+. 
+. 
+. * Areas where affordability worsened most.
+. gsort -affordability_change
+
+. 
+. display ///
+> "AREAS WHERE HOUSING AFFORDABILITY WORSENED MOST, 2015-2025"
+AREAS WHERE HOUSING AFFORDABILITY WORSENED MOST, 2015-2025
+
+. 
+. list geography_name ///
+>      affordability_2015 ///
+>      affordability_2025 ///
+>      affordability_change ///
+>      affordability_pct_change ///
+>      in 1/10, ///
+>      noobs clean
+
+           geography_name   aff~2015   aff~2025   afford..   a~pct_~e  
+                Brentwood   8.153129   10.52765   2.374517     29.124  
+                    Luton   6.948416   9.069446    2.12103   30.52537  
+               Hillingdon    10.3371   12.07101   1.733903   16.77359  
+               Canterbury   7.468957   9.155565   1.686608   22.58158  
+                Redbridge   9.511288   11.19262   1.681328   17.67718  
+                 Trafford   6.991649   8.668234   1.676585   23.97983  
+    Tonbridge and Malling   8.115445    9.77732   1.661875   20.47792  
+                     Bury   5.273908   6.905807   1.631899   30.94289  
+                  Babergh   8.106063   9.674375   1.568312   19.34739  
+     Barking and Dagenham   8.242433   9.774612    1.53218   18.58893  
+
+. 
+. 
+. * Areas where affordability improved most.
+. sort affordability_change
+
+. 
+. display ///
+> "AREAS WHERE HOUSING AFFORDABILITY IMPROVED MOST, 2015-2025"
+AREAS WHERE HOUSING AFFORDABILITY IMPROVED MOST, 2015-2025
+
+. 
+. list geography_name ///
+>      affordability_2015 ///
+>      affordability_2025 ///
+>      affordability_change ///
+>      affordability_pct_change ///
+>      in 1/10, ///
+>      noobs clean
+
+            geography_name   aff~2015   aff~2025   ~y_change   a~pct_c~
+> e  
+    Hammersmith and Fulham   19.28411   14.83302   -4.451089   -23.0816
+> 4  
+               Westminster   20.51572   16.44174   -4.073982   -19.8578
+> 5  
+                 Islington   16.30128   12.32936   -3.971919   -24.3656
+> 9  
+                    Camden     17.202   14.49194   -2.710066   -15.7543
+> 6  
+                   Hackney   14.37657   11.72143   -2.655141   -18.4685
+> 2  
+                   Lambeth   13.53058   10.97198   -2.558601   -18.9097
+> 7  
+                 Southwark   13.56092   11.09262   -2.468297   -18.2015
+> 4  
+             Tower Hamlets   11.87709   9.615385   -2.261701   -19.0425
+> 5  
+                Wandsworth   13.80287   11.58766   -2.215204   -16.0488
+> 7  
+                     Fylde   7.221375   5.457542   -1.763833   -24.4251
+> 7  
+
+. 
+. restore
+
+. 
+. 
+. 
+. * ============================================================
+. * STEP 8: ROBUSTNESS CHECK USING REVISED DATA TO 2024
+. * ============================================================
+. 
+. 
+. * ============================================================
+. * 45. CREATE 2024 ENDPOINT VALUES
+. * ============================================================
+. 
+. * 2025 earnings are provisional.
+. *
+. * Repeat the endpoint analysis using 2024 so the result can
+. * be checked using revised earnings data only.
+. 
+. bysort geography_code: egen house_price_2024 = ///
+>     max(cond(year == 2024, median_house_price, .))
+
+. 
+. bysort geography_code: egen earnings_2024 = ///
+>     max(cond(year == 2024, median_annual_pay, .))
+(22 missing values generated)
+
+. 
+. bysort geography_code: egen affordability_2024 = ///
+>     max(cond(year == 2024, affordability_ratio, .))
+(22 missing values generated)
+
+. 
+. 
+. 
+. * ============================================================
+. * 46. CALCULATE 2015-2024 GROWTH
+. * ============================================================
+. 
+. gen house_price_growth_2024 = ///
+>     100 * ((house_price_2024 / house_price_2015) - 1) ///
+>     if !missing(house_price_2015, house_price_2024)
+
+. 
+. 
+. gen earnings_growth_2024 = ///
+>     100 * ((earnings_2024 / earnings_2015) - 1) ///
+>     if !missing(earnings_2015, earnings_2024)
+(209 missing values generated)
+
+. 
+. 
+. gen growth_gap_2024 = ///
+>     house_price_growth_2024 - earnings_growth_2024 ///
+>     if !missing(house_price_growth_2024, earnings_growth_2024)
+(209 missing values generated)
+
+. 
+. 
+. label variable house_price_growth_2024 ///
+>     "House-price growth, 2015-2024 (%)"
+
+. 
+. label variable earnings_growth_2024 ///
+>     "Earnings growth, 2015-2024 (%)"
+
+. 
+. label variable growth_gap_2024 ///
+>     "House-price growth minus earnings growth, 2015-2024"
+
+. 
+. 
+. 
+. * ============================================================
+. * 47. CALCULATE 2015-2024 AFFORDABILITY CHANGE
+. * ============================================================
+. 
+. gen affordability_change_2024 = ///
+>     affordability_2024 - affordability_2015 ///
+>     if !missing(affordability_2015, affordability_2024)
+(209 missing values generated)
+
+. 
+. 
+. gen affordability_pct_change_2024 = ///
+>     100 * ((affordability_2024 / affordability_2015) - 1) ///
+>     if !missing(affordability_2015, affordability_2024)
+(209 missing values generated)
+
+. 
+. 
+. label variable affordability_change_2024 ///
+>     "Change in affordability ratio, 2015-2024"
+
+. 
+. label variable affordability_pct_change_2024 ///
+>     "Percentage change in affordability ratio, 2015-2024"
+
+. 
+. 
+. 
+. * ============================================================
+. * 48. SUMMARISE THE 2015-2024 ROBUSTNESS RESULTS
+. * ============================================================
+. 
+. summarize ///
+>     house_price_growth_2024 ///
+>     earnings_growth_2024 ///
+>     growth_gap_2024 ///
+>     affordability_change_2024 ///
+>     affordability_pct_change_2024 ///
+>     if analysis_authority_tag == 1, ///
+>     detail
+
+              House-price growth, 2015-2024 (%)
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%     12.02055      -2.883156
+ 5%     24.09639        4.60251
+10%     31.03448       11.80654       Obs                 305
+25%     37.21804       12.02055       Sum of wgt.         305
+
+50%     45.27027                      Mean            45.1257
+                        Largest       Std. dev.      12.19985
+75%     52.96384       70.50068
+90%     60.31746       79.54546       Variance       148.8363
+95%     64.60905             80       Skewness      -.2261821
+99%     70.50068       83.99429       Kurtosis       4.008073
+
+               Earnings growth, 2015-2024 (%)
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%     11.97834       9.862234
+ 5%     22.28234       10.33576
+10%     26.10504       11.97834       Obs                 286
+25%     30.83548       12.18653       Sum of wgt.         286
+
+50%     36.01322                      Mean           36.34481
+                        Largest       Std. dev.      8.670059
+75%     41.86099        57.4921
+90%     46.87257       58.18936       Variance       75.16992
+95%     50.56524       59.06792       Skewness       -.013351
+99%     58.18936       63.46772       Kurtosis       3.536756
+
+          House-price growth minus earnings growth,
+                          2015-2024
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -19.16497       -27.1692
+ 5%    -13.24387       -19.6515
+10%    -9.073025      -19.16497       Obs                 286
+25%    -1.216816      -18.76799       Sum of wgt.         286
+
+50%     8.619599                      Mean           8.995354
+                        Largest       Std. dev.      13.83293
+75%     18.84491       40.15457
+90%     25.30792        40.3663       Variance       191.3499
+95%     31.21255       42.30585       Skewness       .0866901
+99%      40.3663       52.56537       Kurtosis       2.685625
+
+          Change in affordability ratio, 2015-2024
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -1.918022      -2.767246
+ 5%    -.9143038      -2.516911
+10%    -.5080595      -1.918022       Obs                 286
+25%    -.0542693      -1.839229       Sum of wgt.         286
+
+50%     .4672716                      Mean            .421129
+                        Largest       Std. dev.      .8002124
+75%     .9205003        2.11917
+90%     1.412013       2.244029       Variance       .6403398
+95%     1.634734       2.250458       Skewness      -.4997111
+99%     2.244029       2.736286       Kurtosis       4.187693
+
+          Percentage change in affordability ratio,
+                          2015-2024
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -13.37763      -18.60165
+ 5%    -9.579729      -14.34988
+10%    -6.222794      -13.37763       Obs                 286
+25%    -.8472373      -12.84887       Sum of wgt.         286
+
+50%     6.519821                      Mean           6.967423
+                        Largest       Std. dev.      10.45787
+75%     14.23827       30.31302
+90%      20.2861       35.06288       Variance       109.3671
+95%     25.04963       36.54993       Skewness       .2583288
+99%     35.06288       39.99529       Kurtosis       2.799337
+
+. 
+. 
+. count if analysis_authority_tag == 1 ///
+>     & !missing(affordability_change_2024)
+  286
+
+. 
+. 
+. 
+. * ============================================================
+. * 49. CLASSIFY THE 2015-2024 DIRECTION OF CHANGE
+. * ============================================================
+. 
+. gen affordability_direction_2024 = .
+(3,355 missing values generated)
+
+. 
+. replace affordability_direction_2024 = 1 ///
+>     if affordability_change_2024 > 0 ///
+>     & !missing(affordability_change_2024)
+(2,310 real changes made)
+
+. 
+. replace affordability_direction_2024 = 0 ///
+>     if affordability_change_2024 < 0 ///
+>     & !missing(affordability_change_2024)
+(836 real changes made)
+
+. 
+. replace affordability_direction_2024 = 2 ///
+>     if affordability_change_2024 == 0
+(0 real changes made)
+
+. 
+. 
+. * Reuse the labels created for the main analysis.
+. label values affordability_direction_2024 ///
+>     affordability_direction_lbl
+
+. 
+. 
+. tab affordability_direction_2024 ///
+>     if analysis_authority_tag == 1
+
+affordability_d |
+  irection_2024 |      Freq.     Percent        Cum.
+----------------+-----------------------------------
+More affordable |         76       26.57       26.57
+Less affordable |        210       73.43      100.00
+----------------+-----------------------------------
+          Total |        286      100.00
+
+. 
+. 
+. 
+. * ============================================================
+. * 50. COMPARE MAIN AND ROBUSTNESS RESULTS
+. * ============================================================
+. 
+. display "2015-2025 MAIN RESULT"
+2015-2025 MAIN RESULT
+
+. 
+. tab affordability_direction ///
+>     if analysis_authority_tag == 1
+
+affordability_d |
+       irection |      Freq.     Percent        Cum.
+----------------+-----------------------------------
+More affordable |         98       34.27       34.27
+Less affordable |        188       65.73      100.00
+----------------+-----------------------------------
+          Total |        286      100.00
+
+. 
+. 
+. display "2015-2024 ROBUSTNESS RESULT"
+2015-2024 ROBUSTNESS RESULT
+
+. 
+. tab affordability_direction_2024 ///
+>     if analysis_authority_tag == 1
+
+affordability_d |
+  irection_2024 |      Freq.     Percent        Cum.
+----------------+-----------------------------------
+More affordable |         76       26.57       26.57
+Less affordable |        210       73.43      100.00
+----------------+-----------------------------------
+          Total |        286      100.00
+
+. 
+. 
+. 
+. * ============================================================
+. * 51. CHECK BOTH RESULTS USING THE SAME AUTHORITIES
+. * ============================================================
+. 
+. * A clean robustness comparison should use the same
+. * local authorities in both endpoint analyses.
+. *
+. * common_endpoint_sample = 1 only when both:
+. * - 2015-2025 affordability change is available
+. * - 2015-2024 affordability change is available
+. 
+. gen common_endpoint_sample = ///
+>     !missing(affordability_change) ///
+>     & !missing(affordability_change_2024)
+
+. 
+. 
+. * Number of unique authorities in the common sample.
+. count if analysis_authority_tag == 1 ///
+>     & common_endpoint_sample == 1
+  286
+
+. 
+. 
+. display "2015-2025: COMMON SAMPLE"
+2015-2025: COMMON SAMPLE
+
+. 
+. tab affordability_direction ///
+>     if analysis_authority_tag == 1 ///
+>     & common_endpoint_sample == 1
+
+affordability_d |
+       irection |      Freq.     Percent        Cum.
+----------------+-----------------------------------
+More affordable |         98       34.27       34.27
+Less affordable |        188       65.73      100.00
+----------------+-----------------------------------
+          Total |        286      100.00
+
+. 
+. 
+. display "2015-2024: COMMON SAMPLE"
+2015-2024: COMMON SAMPLE
+
+. 
+. tab affordability_direction_2024 ///
+>     if analysis_authority_tag == 1 ///
+>     & common_endpoint_sample == 1
+
+affordability_d |
+  irection_2024 |      Freq.     Percent        Cum.
+----------------+-----------------------------------
+More affordable |         76       26.57       26.57
+Less affordable |        210       73.43      100.00
+----------------+-----------------------------------
+          Total |        286      100.00
+
+. 
+. 
+. 
+. * ============================================================
+. * 52. SAVE THE GENERATED FINAL ANALYSIS DATASET
+. * ============================================================
+. 
+. sort geography_code year
+
+. 
+. save ///
+> "$derived/housing_affordability_analysis_2015_2025.dta", ///
+> replace
+(file
+    ./output/derived_data/housing_affordability_analysis_2015_2025.dt
+    > a not found)
+file
+    ./output/derived_data/housing_affordability_analysis_2015_2025.dt
+    > a saved
+
+. 
+. 
+. 
+. * ============================================================
+. * END ANALYSIS LOG
+. * ============================================================
+. 
+. log close
+      name:  <unnamed>
+       log:  C:\Users\ASUS Expertbook\OneDrive\Documents\Job Applicatio
+> n\Portfolio\Housing\github\housing-affordability-england-wales\output
+> /housing_affordability_analysis.log
+  log type:  text
+ closed on:   6 Oct 2026, 21:01:01
+-----------------------------------------------------------------------
